@@ -4,13 +4,13 @@ import os
 import warnings
 
 import numpy as np
-import xgboost as xgb
+from sklearn.tree import DecisionTreeClassifier
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.preprocessing import StandardScaler
 
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import *
 from tqdm import tqdm
 
@@ -44,13 +44,17 @@ def split_data(csv_file_path, output_save):
     # Split data into training and testing sets (80:20 ratio)
     x_train, x_test, y_train, y_test = train_test_split(x_source, y_source, test_size=0.2, random_state=123)
 
-    # Map labels: 'abnormal' -> 1, 'normal' -> 0
-    y_train = y_train.replace({'abnormal': 1, 'normal': 0})
-    y_test = y_test.replace({'abnormal': 1, 'normal': 0})
-
+    # Feature Scaling
+    sc = StandardScaler()
+    x_train = sc.fit_transform(x_train)
+    x_test = sc.transform(x_test)
+    
     # Combine and save training and testing data
-    df_train = pd.concat([x_train, y_train], axis=1)
-    df_test = pd.concat([x_test, y_test], axis=1)
+    df_train = pd.DataFrame(x_train, columns=x_source.columns)
+    df_train['label'] = y_train.values 
+    
+    df_test = pd.DataFrame(x_test, columns=x_source.columns)
+    df_test['label'] = y_test.values  
 
     df_train.to_csv(os.path.join(output_save, 'train.csv'), index=False)
     df_test.to_csv(os.path.join(output_save, 'test.csv'), index=False)
@@ -65,45 +69,42 @@ def get_random_grid():
         dict: A dictionary containing hyperparameter options for tuning.
     """
     random_grid = {
-        'learning_rate': np.arange(0.01, 0.2, 0.01),
-        'min_child_weight': np.arange(0, 5, 1),
-        'min_split_loss': np.arange(0, 5, 1),
-        'max_depth': np.arange(3, 10, 1),
-        'reg_lambda': [2]
+        'max_depth': np.arange(2, 52, 2),
+        'min_samples_split': np.arange(2, 32, 2),
+        'max_features': np.arange(5, 50, 2),
+        'criterion': ['gini', 'entropy']
     }
 
     return random_grid
 
-def get_best_model(cv, verbose, n_jobs, random_grid, x_train, y_train, output_save):
+def get_best_model(cv, verbose, random_grid, x_train, y_train, output_save):
     """
-    Performs grid search to find the best XGBoost model and saves it.
+    Performs grid search to find the best Decision Tree model and saves it.
 
     Args:
         cv (int): Number of cross-validation folds.
         verbose (int): Verbosity level for grid search.
-        n_jobs (int): Number of parallel jobs to run.
         random_grid (dict): Hyperparameter grid for tuning.
         x_train (DataFrame): Training features.
         y_train (Series): Training labels.
         output_save (str): Directory where the best model will be saved.
 
     Returns:
-        XGBClassifier: The best XGBoost model.
+        DecisionTreeClassifier: The best Decision Tree model.
     """
-    xgb_model = xgb.XGBClassifier()
-    xgb_grid_search = GridSearchCV(
-        xgb_model,
-        random_grid,
+    dt_model = DecisionTreeClassifier()
+    dt_grid_search = GridSearchCV(
+        estimator=dt_model,
+        param_grid=random_grid,
         cv=cv,
         verbose=verbose,
-        n_jobs=n_jobs,
         scoring='accuracy')
 
-    xgb_grid_search.fit(x_train, y_train)
+    dt_grid_search.fit(x_train, y_train)
 
-    best_model = xgb_grid_search.best_estimator_
+    best_model = dt_grid_search.best_estimator_
 
-    filename = f'{output_save}/xgb_best'
+    filename = f'{output_save}/dt_best'
     pickle.dump(best_model, open(filename, 'wb'))
 
     return best_model
@@ -113,7 +114,7 @@ def get_final_data(best_model, x_train, y_train, x_test, y_test, y_predict, outp
     Generates final data including performance metrics, feature importance, and saves visualizations.
 
     Args:
-        best_model (XGBClassifier): The trained model.
+        best_model (DecisionTreeClassifier): The trained model.
         x_train (DataFrame): Training features.
         y_train (Series): Training labels.
         x_test (DataFrame): Testing features.
@@ -166,9 +167,7 @@ def get_final_data(best_model, x_train, y_train, x_test, y_test, y_predict, outp
 
     # Create visualizations
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-    sns.heatmap(cm, annot=True, cmap='Blues', fmt='g', ax=axes[0],
-                xticklabels=['Normal', 'Abnormal'],
-                yticklabels=['Normal', 'Abnormal'])
+    sns.heatmap(cm, annot=True, cmap='Blues', fmt='g', ax=axes[0])
     axes[0].set_xlabel('Predicted Labels')
     axes[0].set_ylabel('True Labels')
     axes[0].set_title('Confusion Matrix')
@@ -206,7 +205,7 @@ def otomatis(csv_file, output_path):
     os.makedirs(output_path, exist_ok=True)
     x_train, x_test, y_train, y_test = split_data(csv_file, output_path)
     random_grid = get_random_grid()
-    best_model = get_best_model(cv=5, verbose=3, random_grid=random_grid, n_jobs=5, x_train=x_train, y_train=y_train, output_save=output_path)
+    best_model = get_best_model(cv=5, verbose=3, random_grid=random_grid, x_train=x_train, y_train=y_train, output_save=output_path)
     y_predict = best_model.predict(x_test)
     get_final_data(best_model, x_train, y_train, x_test, y_test, y_predict, output_path)
 
@@ -217,7 +216,7 @@ def main():
     Returns:
         None
     """
-    folder_path = "../result_track/HASIL PERCOBAAN/S1K1P3REVISI"
+    folder_path = "../../features_data/dt_classification/percobaan_1/with_deletion"
     data_path = glob.glob(os.path.join(folder_path, '*.csv'))
 
     for data in tqdm(data_path, desc="Processing files", unit="file"):
